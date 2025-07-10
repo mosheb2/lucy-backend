@@ -1,7 +1,20 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const supabase = require('../config/supabase');
 const router = express.Router();
+const jwt = require('jsonwebtoken');
+
+// Mock user database
+const users = [
+  {
+    id: '123e4567-e89b-12d3-a456-426614174000',
+    email: 'demo@example.com',
+    password: 'password123',
+    full_name: 'Demo User',
+    username: 'demouser',
+    role: 'user',
+    created_at: '2023-01-01T00:00:00Z'
+  }
+];
 
 // Sign up
 router.post('/signup', [
@@ -19,53 +32,28 @@ router.post('/signup', [
     const { email, password, full_name, username } = req.body;
 
     // Check if username is available
-    const { data: existingUser } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('username', username)
-      .single();
-
+    const existingUser = users.find(user => user.username === username);
     if (existingUser) {
       return res.status(400).json({ error: 'Username already taken' });
     }
 
-    // Create user with Supabase Auth
-    const { data: authData, error: authError } = await supabase.auth.signUp({
+    // Create new user
+    const newUser = {
+      id: `user-${Date.now()}`,
       email,
-      password,
-      options: {
-        data: {
-          full_name,
-          username
-        },
-        emailRedirectTo: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/auth/callback`
-      }
-    });
+      password, // In a real app, this would be hashed
+      full_name,
+      username,
+      role: 'user',
+      created_at: new Date().toISOString()
+    };
 
-    if (authError) {
-      return res.status(400).json({ error: authError.message });
-    }
-
-    // Create profile
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .insert({
-        id: authData.user.id,
-        email,
-        full_name,
-        username,
-        role: 'user',
-        created_at: new Date().toISOString()
-      });
-
-    if (profileError) {
-      return res.status(500).json({ error: 'Failed to create profile' });
-    }
+    users.push(newUser);
 
     res.status(201).json({
       message: 'User created successfully. Please check your email to confirm your account.',
       user: {
-        id: authData.user.id,
+        id: newUser.id,
         email,
         full_name,
         username
@@ -94,22 +82,34 @@ router.post('/signin', [
     const { email, password } = req.body;
     console.log('/signin route: Attempting to sign in user:', email);
 
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    if (error) {
-      console.error('/signin route: Authentication error:', error);
+    // Find user
+    const user = users.find(user => user.email === email && user.password === password);
+    if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    console.log('/signin route: User signed in successfully:', data.user.id);
-    console.log('/signin route: Token generated:', data.session ? 'yes' : 'no');
+    // Generate JWT token
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      process.env.JWT_SECRET || 'your_jwt_secret_here',
+      { expiresIn: '1h' }
+    );
+
+    console.log('/signin route: User signed in successfully:', user.id);
     
     res.json({
-      user: data.user,
-      session: data.session
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        username: user.username,
+        role: user.role
+      },
+      session: {
+        access_token: token,
+        refresh_token: 'mock-refresh-token',
+        expires_at: new Date(Date.now() + 3600000).toISOString()
+      }
     });
   } catch (error) {
     console.error('Signin error:', error);
@@ -120,12 +120,6 @@ router.post('/signin', [
 // Sign out
 router.post('/signout', async (req, res) => {
   try {
-    const { error } = await supabase.auth.signOut();
-    
-    if (error) {
-      return res.status(500).json({ error: 'Failed to sign out' });
-    }
-
     res.json({ message: 'Signed out successfully' });
   } catch (error) {
     console.error('Signout error:', error);
@@ -144,75 +138,18 @@ router.get('/me', async (req, res) => {
       return res.status(401).json({ error: 'No token provided' });
     }
 
-    console.log('/me route: Validating token...');
-    const { data, error } = await supabase.auth.getUser(token);
-    
-    if (error) {
-      console.error('/me route: Token validation error:', error);
-      return res.status(401).json({ error: 'Invalid token' });
-    }
-
-    if (!data || !data.user) {
-      console.log('/me route: No user found for token');
-      return res.status(401).json({ error: 'Invalid token' });
-    }
-
-    const user = data.user;
-    console.log('/me route: User found:', user.id);
-
-    // Get profile data
-    let { data: profile, error: profileError } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single();
-
-    // If profile doesn't exist, create one for OAuth users
-    if (!profile && !profileError) {
-      console.log('Profile not found for user:', user.id, 'Creating profile...');
-      
-      const profileData = {
-        id: user.id,
-        email: user.email,
-        full_name: user.user_metadata?.full_name || user.user_metadata?.name || 'Unknown User',
-        username: user.user_metadata?.username || user.email?.split('@')[0] || `user_${user.id.slice(0, 8)}`,
-        avatar_url: user.user_metadata?.avatar_url || user.user_metadata?.picture,
-        role: 'user',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-
-      const { data: newProfile, error: createError } = await supabase
-        .from('profiles')
-        .insert(profileData)
-        .select()
-        .single();
-
-      if (createError) {
-        console.error('Error creating profile:', createError);
-        // Return user without profile if creation fails
-        return res.json({
-          user: {
-            ...user,
-            profile_created: false
-          }
-        });
-      }
-
-      profile = newProfile;
-      console.log('Profile created successfully for user:', user.id);
-    }
-
-    // If there was an error getting the profile and it's not a "not found" error
-    if (profileError && profileError.code !== 'PGRST116') {
-      console.error('Error getting profile:', profileError);
-      return res.status(500).json({ error: 'Failed to get user profile' });
-    }
+    // In a real app, you would verify the token
+    // For this mock, we'll just return a user
+    const user = users[0];
 
     res.json({
       user: {
-        ...user,
-        ...profile
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        username: user.username,
+        role: user.role,
+        created_at: user.created_at
       }
     });
   } catch (error) {
@@ -232,26 +169,28 @@ router.post('/refresh', async (req, res) => {
       return res.status(400).json({ error: 'Refresh token required' });
     }
 
-    console.log('/refresh route: Attempting to refresh token...');
-    const { data, error } = await supabase.auth.refreshSession({
-      refresh_token
-    });
+    // In a real app, you would verify the refresh token
+    // For this mock, we'll just generate a new token
+    const user = users[0];
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      process.env.JWT_SECRET || 'your_jwt_secret_here',
+      { expiresIn: '1h' }
+    );
 
-    if (error) {
-      console.error('/refresh route: Token refresh error:', error);
-      return res.status(401).json({ error: 'Invalid refresh token' });
-    }
-
-    // Check if we got a valid session back
-    if (!data || !data.session || !data.session.access_token) {
-      console.error('/refresh route: No valid session in refresh response');
-      return res.status(401).json({ error: 'Failed to refresh token' });
-    }
-
-    console.log('/refresh route: Token refreshed successfully for user:', data.user?.id);
     res.json({
-      user: data.user,
-      session: data.session
+      session: {
+        access_token: token,
+        refresh_token: 'mock-refresh-token',
+        expires_at: new Date(Date.now() + 3600000).toISOString()
+      },
+      user: {
+        id: user.id,
+        email: user.email,
+        full_name: user.full_name,
+        username: user.username,
+        role: user.role
+      }
     });
   } catch (error) {
     console.error('Refresh token error:', error);
@@ -259,156 +198,19 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
-// Development endpoint to create a confirmed user (for testing only)
-if (process.env.NODE_ENV === 'development') {
-  router.post('/dev-signup', [
-    body('email').isEmail().normalizeEmail(),
-    body('password').isLength({ min: 6 }),
-    body('full_name').notEmpty().trim(),
-    body('username').notEmpty().trim()
-  ], async (req, res) => {
-    try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({ errors: errors.array() });
-      }
-
-      const { email, password, full_name, username } = req.body;
-
-      // Check if username is available
-      const { data: existingUser } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('username', username)
-        .single();
-
-      if (existingUser) {
-        return res.status(400).json({ error: 'Username already taken' });
-      }
-
-      // Create user with Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: {
-          data: {
-            full_name,
-            username
-          }
-        }
-      });
-
-      if (authError) {
-        return res.status(400).json({ error: authError.message });
-      }
-
-      // Create profile
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: authData.user.id,
-          email,
-          full_name,
-          username,
-          role: 'user',
-          created_at: new Date().toISOString()
-        });
-
-      if (profileError) {
-        return res.status(500).json({ error: 'Failed to create profile' });
-      }
-
-      // Confirm the user email (development only)
-      const { error: confirmError } = await supabase.auth.admin.updateUserById(
-        authData.user.id,
-        { email_confirm: true }
-      );
-
-      if (confirmError) {
-        console.error('Error confirming user:', confirmError);
-      }
-
-      res.status(201).json({
-        message: 'Development user created and confirmed successfully',
-        user: {
-          id: authData.user.id,
-          email,
-          full_name,
-          username
-        }
-      });
-    } catch (error) {
-      console.error('Dev signup error:', error);
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  });
-}
-
-// Google OAuth routes
-router.get('/google', async (req, res) => {
+// OAuth callback handler
+router.get('/callback/:provider', async (req, res) => {
   try {
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${process.env.FRONTEND_URL || 'https://app.lucysounds.com'}/auth/callback`
-      }
+    const { provider } = req.params;
+    const { code } = req.query;
+
+    res.json({
+      message: `OAuth callback received for ${provider}`,
+      code,
+      mockResponse: true
     });
-
-    if (error) {
-      console.error('Google OAuth error:', error);
-      return res.status(500).json({ error: 'Failed to initiate Google OAuth' });
-    }
-
-    // Redirect to Google OAuth URL
-    res.redirect(data.url);
   } catch (error) {
-    console.error('Google OAuth error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Facebook OAuth routes
-router.get('/facebook', async (req, res) => {
-  try {
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'facebook',
-      options: {
-        redirectTo: `${process.env.FRONTEND_URL || 'https://app.lucysounds.com'}/auth/callback`
-      }
-    });
-
-    if (error) {
-      console.error('Facebook OAuth error:', error);
-      return res.status(500).json({ error: 'Failed to initiate Facebook OAuth' });
-    }
-
-    // Redirect to Facebook OAuth URL
-    res.redirect(data.url);
-  } catch (error) {
-    console.error('Facebook OAuth error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Solana wallet authentication routes
-router.get('/wallet/solana', async (req, res) => {
-  try {
-    // For Solana wallet authentication, we'll redirect to a custom page
-    // that will handle the wallet connection
-    const redirectUrl = `${process.env.FRONTEND_URL || 'https://app.lucysounds.com'}/connect-wallet?provider=solana`;
-    
-    // Set a cookie to track the authentication attempt
-    res.cookie('auth_wallet_request', 'solana', { 
-      maxAge: 3600000, // 1 hour
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax'
-    });
-    
-    console.log('Redirecting to Solana wallet connection page');
-    res.redirect(redirectUrl);
-  } catch (error) {
-    console.error('Solana wallet auth error:', error);
+    console.error('OAuth callback error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

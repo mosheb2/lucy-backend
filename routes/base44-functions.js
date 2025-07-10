@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const supabase = require('../config/supabase');
+const scrapeCreators = require('../services/scrapeCreators');
 
 // Base44 Functions Migration
 // Generated on: 2025-01-08
@@ -11,13 +12,32 @@ const supabase = require('../config/supabase');
 // Analytics functions
 router.post('/creator-analytics', async (req, res) => {
     try {
-        const { period = '30d' } = req.body;
+        const { period = '30d', platform_url } = req.body;
         const userId = req.user?.id;
 
         if (!userId) {
             return res.status(401).json({ error: 'Authentication required' });
         }
 
+        // If platform_url is provided, use ScrapeCreators API to get platform-specific analytics
+        if (platform_url) {
+            try {
+                const analyticsData = await scrapeCreators.getPlatformAnalytics(platform_url);
+                return res.json({
+                    success: true,
+                    data: analyticsData
+                });
+            } catch (error) {
+                console.error('Platform analytics error:', error);
+                return res.status(500).json({ 
+                    success: false, 
+                    error: error.message,
+                    function: 'creator-analytics'
+                });
+            }
+        }
+
+        // If no platform_url, continue with general creator analytics
         // Calculate date range based on period
         const now = new Date();
         let startDate;
@@ -81,6 +101,68 @@ router.post('/creator-analytics', async (req, res) => {
             success: false, 
             error: error.message,
             function: 'creator-analytics'
+        });
+    }
+});
+
+// Add a specific endpoint for platform profile data
+router.post('/platform-profile', async (req, res) => {
+    try {
+        const { url, platform } = req.body;
+        
+        if (!url) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'URL is required',
+                function: 'platform-profile'
+            });
+        }
+        
+        let profileData;
+        
+        if (platform) {
+            // If platform is specified, use the specific platform function
+            switch (platform) {
+                case 'youtube':
+                    profileData = await scrapeCreators.getYouTubeAnalytics(url);
+                    break;
+                case 'instagram':
+                    profileData = await scrapeCreators.getInstagramAnalytics(url);
+                    break;
+                case 'tiktok':
+                    profileData = await scrapeCreators.getTikTokAnalytics(url);
+                    break;
+                case 'twitter':
+                    profileData = await scrapeCreators.getTwitterAnalytics(url);
+                    break;
+                case 'facebook':
+                    profileData = await scrapeCreators.getFacebookAnalytics(url);
+                    break;
+                case 'threads':
+                    profileData = await scrapeCreators.getThreadsAnalytics(url);
+                    break;
+                default:
+                    return res.status(400).json({ 
+                        success: false, 
+                        error: 'Unsupported platform',
+                        function: 'platform-profile'
+                    });
+            }
+        } else {
+            // Auto-detect platform from URL
+            profileData = await scrapeCreators.getPlatformAnalytics(url);
+        }
+        
+        res.json({
+            success: true,
+            data: profileData
+        });
+    } catch (error) {
+        console.error('Error in platform-profile:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message,
+            function: 'platform-profile'
         });
     }
 });
@@ -208,22 +290,121 @@ router.post('/youtube-channel', async (req, res) => {
 // Spotify Integration
 router.post('/spotify-artists', async (req, res) => {
     try {
-        const { artistId } = req.body;
+        const { action } = req.body;
+        const userId = req.user?.id;
         
-        // This would integrate with Spotify API
-        const artistData = {
-            id: artistId,
-            name: 'Sample Artist',
-            followers: 5000,
-            monthlyListeners: 25000,
-            topTracks: ['Track 1', 'Track 2', 'Track 3'],
-            integrationStatus: 'connected'
-        };
-
-        res.json({
-            success: true,
-            data: artistData
-        });
+        if (!userId) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+        
+        // Get user's Spotify access token from database
+        const { data: userProfile, error: userError } = await supabase
+            .from('profiles')
+            .select('spotify_access_token, spotify_refresh_token, spotify_for_artists_connected')
+            .eq('id', userId)
+            .single();
+        
+        if (userError || !userProfile) {
+            return res.status(404).json({ 
+                success: false, 
+                error: 'User profile not found',
+                function: 'spotify-artists'
+            });
+        }
+        
+        // Check if user has connected Spotify for Artists
+        if (!userProfile.spotify_for_artists_connected) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Spotify for Artists not connected',
+                function: 'spotify-artists'
+            });
+        }
+        
+        // Initialize Spotify service
+        const spotifyService = require('../services/spotify');
+        const spotify = new spotifyService();
+        
+        let accessToken = userProfile.spotify_access_token;
+        
+        // Refresh token if necessary
+        try {
+            if (userProfile.spotify_refresh_token) {
+                const tokenData = await spotify.refreshAccessToken(userProfile.spotify_refresh_token);
+                accessToken = tokenData.access_token;
+                
+                // Update the access token in the database
+                await supabase
+                    .from('profiles')
+                    .update({ 
+                        spotify_access_token: tokenData.access_token,
+                        spotify_token_updated_at: new Date().toISOString()
+                    })
+                    .eq('id', userId);
+            }
+        } catch (tokenError) {
+            console.error('Error refreshing Spotify token:', tokenError);
+            // Continue with existing token if refresh fails
+        }
+        
+        // Handle different actions
+        if (action === 'analytics') {
+            // Get Spotify for Artists analytics
+            try {
+                // Get user profile
+                const userProfile = await spotify.getUserProfile(accessToken);
+                
+                // Get artist ID from user profile
+                const artistId = userProfile.id;
+                
+                // In a real implementation, you would use the Spotify for Artists API
+                // For now, we'll return mock data
+                const artistData = {
+                    platform: 'spotify',
+                    supported: true,
+                    followers: userProfile.followers?.total || 0,
+                    profileName: userProfile.display_name || '',
+                    username: userProfile.id,
+                    avatar: userProfile.images?.[0]?.url || '',
+                    external_url: userProfile.external_urls?.spotify || '',
+                    profile: {
+                        followers: userProfile.followers?.total || 0,
+                        display_name: userProfile.display_name,
+                        country: userProfile.country,
+                        email: userProfile.email,
+                        product: userProfile.product
+                    },
+                    // Mock data for monthly listeners and other metrics
+                    monthlyListeners: Math.floor(Math.random() * 100000) + 5000,
+                    growth: Math.floor(Math.random() * 15) + 1,
+                    streams: Math.floor(Math.random() * 1000000) + 10000,
+                    saves: Math.floor(Math.random() * 50000) + 1000,
+                    topTracks: [
+                        { name: 'Top Track 1', streams: Math.floor(Math.random() * 100000) + 1000 },
+                        { name: 'Top Track 2', streams: Math.floor(Math.random() * 80000) + 1000 },
+                        { name: 'Top Track 3', streams: Math.floor(Math.random() * 60000) + 1000 }
+                    ]
+                };
+                
+                return res.json({
+                    success: true,
+                    data: artistData
+                });
+            } catch (error) {
+                console.error('Error fetching Spotify analytics:', error);
+                return res.status(500).json({ 
+                    success: false, 
+                    error: 'Failed to fetch Spotify analytics',
+                    function: 'spotify-artists'
+                });
+            }
+        } else {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'Invalid action',
+                function: 'spotify-artists'
+            });
+        }
     } catch (error) {
         console.error('Error in spotify-artists:', error);
         res.status(500).json({ 
@@ -493,6 +674,187 @@ router.post('/analytics-engine', async (req, res) => {
             },
             timestamp: new Date().toISOString()
         };
+
+        res.json({
+            success: true,
+            data: analyticsResult
+        });
+    } catch (error) {
+        console.error('Error in analytics-engine:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message,
+            function: 'analytics-engine'
+        });
+    }
+});
+
+// Promotion Engine
+router.post('/promotion-engine', async (req, res) => {
+    try {
+        const { campaignData } = req.body;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
+        // Create promotion campaign
+        const { data: campaign, error } = await supabase
+            .from('promotions')
+            .insert({
+                user_id: userId,
+                type: campaignData.type,
+                title: campaignData.title,
+                description: campaignData.description,
+                target_audience: campaignData.targetAudience,
+                budget: campaignData.budget,
+                status: 'active',
+                created_at: new Date().toISOString()
+            })
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({
+            success: true,
+            data: {
+                campaignId: campaign.id,
+                status: 'active',
+                estimatedReach: 5000,
+                estimatedCost: campaignData.budget * 0.1
+            }
+        });
+    } catch (error) {
+        console.error('Error in promotion-engine:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message,
+            function: 'promotion-engine'
+        });
+    }
+});
+
+// Public Campaign
+router.post('/public-campaign', async (req, res) => {
+    try {
+        const { action, promotionId, email, name } = req.body;
+
+        switch (action) {
+            case 'collect_fan':
+                // Store fan data
+                const { error } = await supabase
+                    .from('campaign_fans')
+                    .insert({
+                        promotion_id: promotionId,
+                        email,
+                        name,
+                        created_at: new Date().toISOString()
+                    });
+                
+                if (error) throw error;
+                
+                res.json({
+                    success: true,
+                    data: { message: 'Fan data collected successfully' }
+                });
+                break;
+            default:
+                res.status(400).json({ error: 'Invalid action' });
+        }
+    } catch (error) {
+        console.error('Error in public-campaign:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message,
+            function: 'public-campaign'
+        });
+    }
+});
+
+// YouTube Ideas
+router.post('/youtube-ideas', async (req, res) => {
+    try {
+        const { topic } = req.body;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
+        // Generate YouTube content ideas
+        const ideas = [
+            `Behind the scenes: Making of "${topic}"`,
+            `Studio session: Recording "${topic}"`,
+            `Reaction video: Fans listening to "${topic}"`,
+            `Tutorial: How I created "${topic}"`,
+            `Collaboration: Working with other artists on "${topic}"`
+        ];
+
+        res.json({
+            success: true,
+            data: {
+                topic,
+                ideas,
+                generatedAt: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('Error in youtube-ideas:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message,
+            function: 'youtube-ideas'
+        });
+    }
+});
+
+// Publishing Services
+router.post('/publishing-services', async (req, res) => {
+    try {
+        const { serviceData } = req.body;
+        const userId = req.user?.id;
+
+        if (!userId) {
+            return res.status(401).json({ error: 'Authentication required' });
+        }
+
+        // Create publishing service request
+        const { data: service, error } = await supabase
+            .from('publishing_services')
+            .insert({
+                user_id: userId,
+                service_type: serviceData.type,
+                title: serviceData.title,
+                description: serviceData.description,
+                status: 'pending',
+                created_at: new Date().toISOString()
+            })
+            .select()
+            .single();
+
+        if (error) throw error;
+
+        res.json({
+            success: true,
+            data: {
+                serviceId: service.id,
+                status: 'pending',
+                estimatedCompletion: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
+            }
+        });
+    } catch (error) {
+        console.error('Error in publishing-services:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message,
+            function: 'publishing-services'
+        });
+    }
+});
+
+module.exports = router; 
 
         res.json({
             success: true,

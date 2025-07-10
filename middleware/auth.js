@@ -74,3 +74,17 @@ module.exports = {
   authenticateToken,
   requireAdmin
 }; 
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Admin check error:', error);
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+};
+
+module.exports = {
+  authenticateToken,
+  requireAdmin
+}; 
