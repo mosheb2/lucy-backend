@@ -83,12 +83,16 @@ router.post('/signin', [
   body('password').notEmpty()
 ], async (req, res) => {
   try {
+    console.log('/signin route: Received signin request');
+    
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
+      console.log('/signin route: Validation errors', errors.array());
       return res.status(400).json({ errors: errors.array() });
     }
 
     const { email, password } = req.body;
+    console.log('/signin route: Attempting to sign in user:', email);
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email,
@@ -96,9 +100,13 @@ router.post('/signin', [
     });
 
     if (error) {
+      console.error('/signin route: Authentication error:', error);
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    console.log('/signin route: User signed in successfully:', data.user.id);
+    console.log('/signin route: Token generated:', data.session ? 'yes' : 'no');
+    
     res.json({
       user: data.user,
       session: data.session
@@ -132,14 +140,25 @@ router.get('/me', async (req, res) => {
     const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) {
+      console.log('/me route: No token provided');
       return res.status(401).json({ error: 'No token provided' });
     }
 
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    console.log('/me route: Validating token...');
+    const { data, error } = await supabase.auth.getUser(token);
     
-    if (error || !user) {
+    if (error) {
+      console.error('/me route: Token validation error:', error);
       return res.status(401).json({ error: 'Invalid token' });
     }
+
+    if (!data || !data.user) {
+      console.log('/me route: No user found for token');
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    const user = data.user;
+    console.log('/me route: User found:', user.id);
 
     // Get profile data
     let { data: profile, error: profileError } = await supabase
@@ -205,28 +224,31 @@ router.get('/me', async (req, res) => {
 // Refresh token
 router.post('/refresh', async (req, res) => {
   try {
+    console.log('/refresh route: Received refresh request');
     const { refresh_token } = req.body;
 
     if (!refresh_token) {
+      console.log('/refresh route: No refresh token provided');
       return res.status(400).json({ error: 'Refresh token required' });
     }
 
+    console.log('/refresh route: Attempting to refresh token...');
     const { data, error } = await supabase.auth.refreshSession({
       refresh_token
     });
 
     if (error) {
-      console.error('Token refresh error:', error);
+      console.error('/refresh route: Token refresh error:', error);
       return res.status(401).json({ error: 'Invalid refresh token' });
     }
 
     // Check if we got a valid session back
-    if (!data.session || !data.session.access_token) {
-      console.error('No valid session in refresh response');
+    if (!data || !data.session || !data.session.access_token) {
+      console.error('/refresh route: No valid session in refresh response');
       return res.status(401).json({ error: 'Failed to refresh token' });
     }
 
-    console.log('Token refreshed successfully');
+    console.log('/refresh route: Token refreshed successfully for user:', data.user?.id);
     res.json({
       user: data.user,
       session: data.session

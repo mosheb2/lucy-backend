@@ -32,14 +32,40 @@ const limiter = rateLimit({
 });
 
 // Middleware
-app.use(helmet());
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  contentSecurityPolicy: false
+}));
 app.use(compression());
 app.use(morgan('combined'));
 app.use(limiter);
-app.use(cors({
-  origin: [process.env.FRONTEND_URL || 'https://app.lucysounds.com', 'http://localhost:5173'],
-  credentials: true
-}));
+
+// Configure CORS
+const corsOptions = {
+  origin: function (origin, callback) {
+    const allowedOrigins = [
+      'https://app.lucysounds.com',
+      'https://lucy-frontend.herokuapp.com',
+      'http://localhost:5173',
+      'http://localhost:3000'
+    ];
+    
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      console.log('CORS blocked origin:', origin);
+      callback(null, false);
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // Enable preflight for all routes
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 

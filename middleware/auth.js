@@ -12,18 +12,32 @@ const authenticateToken = async (req, res, next) => {
     const token = authHeader && authHeader.split(' ')[1];
 
     if (!token) {
+      console.log('No token provided in request');
       return res.status(401).json({ error: 'Access token required' });
     }
 
-    const { data: { user }, error } = await supabase.auth.getUser(token);
+    console.log('Validating token...');
     
-    if (error || !user) {
+    try {
+      const { data, error } = await supabase.auth.getUser(token);
+      
+      if (error) {
+        console.log('Token validation error:', error.message);
+        return res.status(401).json({ error: 'Invalid token' });
+      }
+      
+      if (!data || !data.user) {
+        console.log('No user found for token');
+        return res.status(401).json({ error: 'Invalid token' });
+      }
+
+      // Add user to request object
+      req.user = data.user;
+      next();
+    } catch (validationError) {
+      console.error('Token validation exception:', validationError);
       return res.status(401).json({ error: 'Invalid token' });
     }
-
-    // Add user to request object
-    req.user = user;
-    next();
   } catch (error) {
     console.error('Authentication error:', error);
     res.status(500).json({ error: 'Internal server error' });
