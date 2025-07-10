@@ -371,25 +371,20 @@ router.get('/facebook', async (req, res) => {
 // Solana wallet authentication routes
 router.get('/wallet/solana', async (req, res) => {
   try {
-    // For Solana wallet authentication, we'll use Supabase's custom OAuth provider
-    // This is a simplified implementation - in a real app, you would integrate with Solana wallet adapter
-    const { data, error } = await supabase.auth.signInWithOAuth({
-      provider: 'github', // Using GitHub as a placeholder - in production, use a proper Solana wallet provider
-      options: {
-        redirectTo: `${process.env.FRONTEND_URL || 'https://app.lucysounds.com'}/auth/callback`,
-        queryParams: {
-          wallet_type: 'solana' // Add custom parameter to identify this as a Solana wallet auth
-        }
-      }
+    // For Solana wallet authentication, we'll redirect to a custom page
+    // that will handle the wallet connection
+    const redirectUrl = `${process.env.FRONTEND_URL || 'https://app.lucysounds.com'}/connect-wallet?provider=solana`;
+    
+    // Set a cookie to track the authentication attempt
+    res.cookie('auth_wallet_request', 'solana', { 
+      maxAge: 3600000, // 1 hour
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax'
     });
-
-    if (error) {
-      console.error('Solana wallet auth error:', error);
-      return res.status(500).json({ error: 'Failed to initiate Solana wallet authentication' });
-    }
-
-    // Redirect to auth URL
-    res.redirect(data.url);
+    
+    console.log('Redirecting to Solana wallet connection page');
+    res.redirect(redirectUrl);
   } catch (error) {
     console.error('Solana wallet auth error:', error);
     res.status(500).json({ error: 'Internal server error' });
