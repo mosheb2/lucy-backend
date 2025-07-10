@@ -2,6 +2,7 @@ const express = require('express');
 const { body, validationResult } = require('express-validator');
 const router = express.Router();
 const jwt = require('jsonwebtoken');
+const supabase = require('../config/supabase');
 
 // Mock user database
 const users = [
@@ -212,6 +213,72 @@ router.get('/callback/:provider', async (req, res) => {
   } catch (error) {
     console.error('OAuth callback error:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Google OAuth route - redirects to Google sign-in
+router.get('/google', async (req, res) => {
+  try {
+    console.log('Initiating Google OAuth flow');
+    
+    // Get the frontend URL from environment or use a default
+    const frontendUrl = process.env.FRONTEND_URL || 'https://lucy-frontend-de5a2f0c56c0.herokuapp.com';
+    
+    // In a real implementation, we would use the Supabase client to get the OAuth URL
+    // For this mock, we'll redirect to Supabase's OAuth URL directly
+    const redirectUrl = `${frontendUrl}/auth/callback/google`;
+    
+    // Create a URL to the Supabase OAuth endpoint
+    const { data } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: redirectUrl
+      }
+    });
+    
+    if (data && data.url) {
+      console.log('Redirecting to Google OAuth URL:', data.url);
+      return res.redirect(data.url);
+    } else {
+      console.error('Failed to get OAuth URL from Supabase');
+      return res.status(500).json({ error: 'Failed to initiate OAuth flow' });
+    }
+  } catch (error) {
+    console.error('Google OAuth error:', error);
+    res.status(500).json({ error: 'Failed to initiate Google OAuth flow' });
+  }
+});
+
+// Facebook OAuth route
+router.get('/facebook', async (req, res) => {
+  try {
+    console.log('Initiating Facebook OAuth flow');
+    
+    // Get the frontend URL from environment or use a default
+    const frontendUrl = process.env.FRONTEND_URL || 'https://lucy-frontend-de5a2f0c56c0.herokuapp.com';
+    
+    // In a real implementation, we would use the Supabase client to get the OAuth URL
+    // For this mock, we'll redirect to Supabase's OAuth URL directly
+    const redirectUrl = `${frontendUrl}/auth/callback/facebook`;
+    
+    // Create a URL to the Supabase OAuth endpoint
+    const { data } = await supabase.auth.signInWithOAuth({
+      provider: 'facebook',
+      options: {
+        redirectTo: redirectUrl
+      }
+    });
+    
+    if (data && data.url) {
+      console.log('Redirecting to Facebook OAuth URL:', data.url);
+      return res.redirect(data.url);
+    } else {
+      console.error('Failed to get OAuth URL from Supabase');
+      return res.status(500).json({ error: 'Failed to initiate OAuth flow' });
+    }
+  } catch (error) {
+    console.error('Facebook OAuth error:', error);
+    res.status(500).json({ error: 'Failed to initiate Facebook OAuth flow' });
   }
 });
 
