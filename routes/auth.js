@@ -345,4 +345,55 @@ router.get('/google', async (req, res) => {
   }
 });
 
+// Facebook OAuth routes
+router.get('/facebook', async (req, res) => {
+  try {
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'facebook',
+      options: {
+        redirectTo: `${process.env.FRONTEND_URL || 'https://app.lucysounds.com'}/auth/callback`
+      }
+    });
+
+    if (error) {
+      console.error('Facebook OAuth error:', error);
+      return res.status(500).json({ error: 'Failed to initiate Facebook OAuth' });
+    }
+
+    // Redirect to Facebook OAuth URL
+    res.redirect(data.url);
+  } catch (error) {
+    console.error('Facebook OAuth error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Solana wallet authentication routes
+router.get('/wallet/solana', async (req, res) => {
+  try {
+    // For Solana wallet authentication, we'll use Supabase's custom OAuth provider
+    // This is a simplified implementation - in a real app, you would integrate with Solana wallet adapter
+    const { data, error } = await supabase.auth.signInWithOAuth({
+      provider: 'github', // Using GitHub as a placeholder - in production, use a proper Solana wallet provider
+      options: {
+        redirectTo: `${process.env.FRONTEND_URL || 'https://app.lucysounds.com'}/auth/callback`,
+        queryParams: {
+          wallet_type: 'solana' // Add custom parameter to identify this as a Solana wallet auth
+        }
+      }
+    });
+
+    if (error) {
+      console.error('Solana wallet auth error:', error);
+      return res.status(500).json({ error: 'Failed to initiate Solana wallet authentication' });
+    }
+
+    // Redirect to auth URL
+    res.redirect(data.url);
+  } catch (error) {
+    console.error('Solana wallet auth error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 module.exports = router; 
